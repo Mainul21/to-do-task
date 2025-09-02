@@ -57,37 +57,72 @@ function validateTask(req, res, next) {
 // 🧑 Register
 app.post('/auth/register', async (req, res) => {
   const { name, email, password, role } = req.body;
+
+  console.log("📩 Incoming register request body:", req.body);
+
+  // Debugging all users (to see if collection is really empty)
+  const allUsers = await User.find({});
+  console.log("📊 All users currently in DB:", allUsers);
+
   if (!email || !password || !role) {
+    console.log("❌ Missing fields in request");
     return res.status(400).json({ error: 'Email, password, and role are required' });
   }
   if (!['manager', 'employee'].includes(role)) {
+    console.log("❌ Invalid role:", role);
     return res.status(400).json({ error: 'Role must be manager or employee' });
   }
   if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+    console.log("❌ Invalid email format:", email);
     return res.status(400).json({ error: 'Invalid email format' });
   }
   if (password.length < 6) {
+    console.log("❌ Password too short");
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
 
   try {
-    const exists = await User.findOne({ email: email.toLowerCase() });
-    if (exists) return res.status(400).json({ error: 'User with this email already exists' });
+    const normalizedEmail = email.toLowerCase().trim();
+    console.log("🔍 Checking if user exists with email:", normalizedEmail);
 
+    const exists = await User.findOne({ email: normalizedEmail });
+    console.log("📌 Result of User.findOne:", exists);
+
+    if (exists) {
+      console.log("⚠️ User already exists with this email:", normalizedEmail);
+      return res.status(400).json({ error: 'User with this email already exists' });
+    }
+
+    console.log("🔑 Hashing password...");
     const hash = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email: email.toLowerCase(), password: hash, role });
 
-    const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    console.log("📝 Creating new user...");
+    const user = await User.create({
+      name,
+      email: normalizedEmail,
+      password: hash,
+      role
+    });
+
+    console.log("✅ User created successfully:", user);
+
+    const token = jwt.sign(
+      { id: user._id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
     res.status(201).json({
       message: 'User registered successfully',
       token,
       user: { id: user._id, name: user.name, email: user.email, role: user.role }
     });
   } catch (err) {
-    console.error('Error registering user:', err);
+    console.error("💥 Error during registration:", err);
     res.status(500).json({ error: 'Failed to register user' });
   }
 });
+
 
 // 🔑 Login
 app.post('/auth/login', async (req, res) => {
@@ -199,7 +234,6 @@ app.put('/tasks/:id', authMiddleware, validateTask, async (req, res) => {
     res.status(500).json({ error: 'Failed to update task' });
   }
 });
-
 // 🗑️ Delete task (manager only)
 app.delete('/tasks/:id', authMiddleware, async (req, res) => {
   if (req.user.role !== 'manager') {
@@ -218,7 +252,10 @@ app.delete('/tasks/:id', authMiddleware, async (req, res) => {
   }
 });
 
+
 // 🚀 Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+
 });

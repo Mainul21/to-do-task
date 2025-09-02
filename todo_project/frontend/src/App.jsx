@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from "react";
 
 function App() {
+  const API_BASE = 'http://localhost:4000';
   // State for authentication
   const [user, setUser] = useState(null);
-  const [users, setUsers] = useState(() => {
-    const savedUsers = localStorage.getItem("users");
-    return savedUsers ? JSON.parse(savedUsers) : [];
-  });
-  const [username, setUsername] = useState("");
+  const [token, setToken] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
@@ -16,11 +15,9 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
 
   // State for tasks
-  const [tasks, setTasks] = useState(() => {
-    const savedTasks = localStorage.getItem("tasks");
-    return savedTasks ? JSON.parse(savedTasks) : [];
-  });
+  const [tasks, setTasks] = useState([]);
   const [newTask, setNewTask] = useState("");
+  const [description, setDescription] = useState("");
   const [assignee, setAssignee] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [priority, setPriority] = useState("medium");
@@ -34,15 +31,27 @@ function App() {
     return localStorage.getItem("darkMode") === "true";
   });
 
-  // Save to localStorage
+  // Load from localStorage
   useEffect(() => {
-    localStorage.setItem("users", JSON.stringify(users));
-  }, [users]);
+    const savedToken = localStorage.getItem("token");
+    const savedUser = localStorage.getItem("user");
+    if (savedToken && savedUser) {
+      setToken(savedToken);
+      setUser(JSON.parse(savedUser));
+    }
+  }, []);
 
+  // Fetch tasks and users when user changes
   useEffect(() => {
-    localStorage.setItem("tasks", JSON.stringify(tasks));
-  }, [tasks]);
+    if (user) {
+      fetchTasks();
+      if (user.role === "manager") {
+        fetchUsers();
+      }
+    }
+  }, [user]);
 
+  // Dark mode
   useEffect(() => {
     localStorage.setItem("darkMode", darkMode);
     if (darkMode) {
@@ -53,118 +62,222 @@ function App() {
   }, [darkMode]);
 
   // Auth functions
-  const handleAuth = () => {
-    // validation differs for login vs register
+  const handleAuth = async () => {
+    setError("");
+    const headers = { "Content-Type": "application/json" };
+
     if (isLogin) {
-      if (!username || !password) {
-        setError("Please fill in both username and password");
+      if (!email || !password) {
+        setError("Please fill in email and password");
         return;
       }
-      const foundUser = users.find(
-        (u) => u.username === username && u.password === password
-      );
-      if (foundUser) {
-        setUser(foundUser);
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ email, password }),
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || "Login failed");
+        }
+        const data = await res.json();
+        setUser(data.user);
+        setToken(data.token);
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("user", JSON.stringify(data.user));
         setShowAuthModal(false);
-        setError("");
-      } else {
-        setError("Invalid credentials");
+      } catch (err) {
+        setError(err.message);
       }
     } else {
-      if (!username || !email || !password) {
-        setError("Please fill in username, email and password");
+      if (!name || !email || !password) {
+        setError("Please fill in name, email and password");
         return;
       }
-      if (users.some((u) => u.username === username || u.email === email)) {
-        setError("Username or email already exists");
-        return;
+      try {
+        const res = await fetch(`${API_BASE}/auth/register`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name, email, password, role }),
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || "Registration failed");
+        }
+        const data = await res.json();
+        setUser(data.user);
+        setToken(data.token);
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("user", JSON.stringify(data.user));
+        setShowAuthModal(false);
+      } catch (err) {
+        setError(err.message);
       }
-      const newUser = { username, email, password, role };
-      setUsers([...users, newUser]);
-      setUser(newUser);
-      setShowAuthModal(false);
-      setError("");
     }
 
-    // clear input fields
-    setUsername("");
+    // Clear input fields
+    setName("");
     setEmail("");
     setPassword("");
   };
 
   const handleLogout = () => {
     setUser(null);
+    setToken(null);
+    setTasks([]);
+    setUsers([]);
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+  };
+
+  // Fetch functions
+  const authHeaders = () => ({
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  });
+
+  const fetchTasks = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleLogout();
+        throw new Error("Failed to fetch tasks");
+      }
+      const data = await res.json();
+      setTasks(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/users`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleLogout();
+        throw new Error("Failed to fetch users");
+      }
+      const data = await res.json();
+      setUsers(data);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   // Task functions
-  const handleAddTask = () => {
+  const capitalizePriority = (p) => p.charAt(0).toUpperCase() + p.slice(1);
+
+  const handleAddTask = async () => {
     if (!newTask.trim()) return;
-    const task = {
-      id: Date.now(),
-      text: newTask,
-      completed: false,
-      assignee: assignee || (user ? user.username : ""),
+    const body = {
+      title: newTask,
+      description: description,
       dueDate,
-      priority,
+      priority: capitalizePriority(priority),
+      assignedTo: assignee || "Unassigned",
     };
-    setTasks([...tasks, task]);
-    setNewTask("");
-    setAssignee("");
-    setDueDate("");
-    setPriority("medium");
+    try {
+      const res = await fetch(`${API_BASE}/tasks`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Failed to create task");
+      await fetchTasks();
+      setNewTask("");
+      setDescription("");
+      setAssignee("");
+      setDueDate("");
+      setPriority("medium");
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const handleDeleteTask = (id) => {
-    setTasks(tasks.filter((task) => task.id !== id));
+  const handleDeleteTask = async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${id}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to delete task");
+      await fetchTasks();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const handleToggleTask = (id) => {
-    setTasks(
-      tasks.map((task) =>
-        task.id === id ? { ...task, completed: !task.completed } : task
-      )
-    );
+  const handleToggleTask = async (id) => {
+    const task = tasks.find((t) => t._id === id);
+    if (!task) return;
+    const completed = !task.completed;
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${id}`, {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify({ completed }),
+      });
+      if (!res.ok) throw new Error("Failed to update task");
+      await fetchTasks();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleEditTask = (task) => {
     setEditingTask(task);
-    setNewTask(task.text);
-    setAssignee(task.assignee);
-    setDueDate(task.dueDate);
-    setPriority(task.priority);
+    setNewTask(task.title);
+    setDescription(task.description || "");
+    setAssignee(task.assignedTo === "Unassigned" ? "" : task.assignedTo);
+    setDueDate(task.dueDate ? new Date(task.dueDate).toISOString().slice(0, 10) : "");
+    setPriority(task.priority.toLowerCase());
   };
 
-  const handleUpdateTask = () => {
+  const handleUpdateTask = async () => {
     if (!newTask.trim()) return;
-    setTasks(
-      tasks.map((task) =>
-        task.id === editingTask.id
-          ? { ...task, text: newTask, assignee, dueDate, priority }
-          : task
-      )
-    );
-    setEditingTask(null);
-    setNewTask("");
-    setAssignee("");
-    setDueDate("");
-    setPriority("medium");
+    const body = {
+      title: newTask,
+      description: description,
+      dueDate,
+      priority: capitalizePriority(priority),
+      assignedTo: assignee || "Unassigned",
+    };
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${editingTask._id}`, {
+        method: "PUT",
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Failed to update task");
+      await fetchTasks();
+      setEditingTask(null);
+      setNewTask("");
+      setDescription("");
+      setAssignee("");
+      setDueDate("");
+      setPriority("medium");
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   // Filtered and sorted tasks
   const filteredTasks = tasks
     .filter((task) => {
-      // if user is an employee only show their tasks
-      if (user && user.role === "employee" && task.assignee !== user.username)
-        return false;
       if (filter === "completed" && !task.completed) return false;
       if (filter === "active" && task.completed) return false;
-      return task.text.toLowerCase().includes(search.toLowerCase());
+      return task.title.toLowerCase().includes(search.toLowerCase());
     })
     .sort((a, b) => {
       if (sortBy === "dueDate")
         return new Date(a.dueDate) - new Date(b.dueDate);
       if (sortBy === "priority") {
-        const priorityOrder = { high: 0, medium: 1, low: 2 };
+        const priorityOrder = { High: 0, Medium: 1, Low: 2 };
         return priorityOrder[a.priority] - priorityOrder[b.priority];
       }
       return 0;
@@ -176,6 +289,12 @@ function App() {
   const progress = totalTasks
     ? Math.round((completedTasks / totalTasks) * 100)
     : 0;
+
+  const getAssigneeName = (assignedTo) => {
+    if (assignedTo === "Unassigned") return "Unassigned";
+    const foundUser = users.find((u) => u.email === assignedTo);
+    return foundUser ? foundUser.name : assignedTo;
+  };
 
   return (
     <div
@@ -198,7 +317,7 @@ function App() {
                 onClick={handleLogout}
                 className="px-3 py-1 rounded bg-red-600 text-white"
               >
-                Logout ({user.username})
+                Logout ({user.name})
               </button>
             ) : (
               <button
@@ -213,62 +332,67 @@ function App() {
 
         {user && (
           <div>
-            {/* Task input */}
-            <div className="mb-4 flex gap-2">
-              <input
-                type="text"
-                placeholder="New task"
-                value={newTask}
-                onChange={(e) => setNewTask(e.target.value)}
-                className="flex-1 p-2 rounded bg-gray-200 text-gray-900 placeholder-gray-400 dark:bg-gray-700 dark:text-white"
-              />
-              {user.role === "manager" && (
+            {/* Task input - manager only */}
+            {user.role === "manager" && (
+              <div className="mb-4 flex gap-2">
+                <input
+                  type="text"
+                  placeholder="New task title"
+                  value={newTask}
+                  onChange={(e) => setNewTask(e.target.value)}
+                  className="flex-1 p-2 rounded bg-gray-200 text-gray-900 placeholder-gray-400 dark:bg-gray-700 dark:text-white"
+                />
+                <input
+                  type="text"
+                  placeholder="Description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="flex-1 p-2 rounded bg-gray-200 text-gray-900 placeholder-gray-400 dark:bg-gray-700 dark:text-white"
+                />
                 <select
                   value={assignee}
                   onChange={(e) => setAssignee(e.target.value)}
                   className="p-2 rounded bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-white"
                 >
-                  <option value="">Assign to...</option>
-                  {users
-                    .filter((u) => u.role === "employee")
-                    .map((emp) => (
-                      <option key={emp.username} value={emp.username}>
-                        {emp.username}
-                      </option>
-                    ))}
+                  <option value="">Unassigned</option>
+                  {users.map((emp) => (
+                    <option key={emp._id} value={emp.email}>
+                      {emp.name}
+                    </option>
+                  ))}
                 </select>
-              )}
-              <input
-                type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                className="p-2 rounded bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-white"
-              />
-              <select
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-                className="p-2 rounded bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-white"
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-              {editingTask ? (
-                <button
-                  onClick={handleUpdateTask}
-                  className="px-4 py-2 bg-green-600 text-white rounded"
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  className="p-2 rounded bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-white"
+                />
+                <select
+                  value={priority}
+                  onChange={(e) => setPriority(e.target.value)}
+                  className="p-2 rounded bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-white"
                 >
-                  Update
-                </button>
-              ) : (
-                <button
-                  onClick={handleAddTask}
-                  className="px-4 py-2 bg-blue-600 text-white rounded"
-                >
-                  Add
-                </button>
-              )}
-            </div>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+                {editingTask ? (
+                  <button
+                    onClick={handleUpdateTask}
+                    className="px-4 py-2 bg-green-600 text-white rounded"
+                  >
+                    Update
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleAddTask}
+                    className="px-4 py-2 bg-blue-600 text-white rounded"
+                  >
+                    Add
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Filters */}
             <div className="flex gap-2 mb-4">
@@ -313,42 +437,51 @@ function App() {
             <ul>
               {filteredTasks.map((task) => (
                 <li
-                  key={task.id}
-                  className="flex justify-between items-center p-2 mb-2 rounded bg-white text-white dark:bg-gray-800"
+                  key={task._id}
+                  className="flex justify-between items-center p-2 mb-2 rounded bg-white dark:bg-gray-800"
                 >
-                  <div>
-                    <input
-                      type="checkbox"
-                      checked={task.completed}
-                      onChange={() => handleToggleTask(task.id)}
-                      className="mr-2"
-                    />
-                    <span className={task.completed ? "line-through" : ""}>
-                      {task.text}
-                    </span>
-                    <span className="ml-2 text-sm text-gray-500">
-                      (Due: {task.dueDate || "N/A"}, {task.priority})
-                    </span>
-                    {user.role === "manager" && (
-                      <span className="ml-2 text-sm text-gray-500">
-                        Assigned to: {task.assignee}
+                  <div className="flex flex-col">
+                    <div>
+                      <input
+                        type="checkbox"
+                        checked={task.completed}
+                        onChange={() => handleToggleTask(task._id)}
+                        className="mr-2"
+                      />
+                      <span className={task.completed ? "line-through" : ""}>
+                        {task.title}
                       </span>
+                      <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">
+                        (Due: {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "N/A"}, {task.priority})
+                      </span>
+                      {user.role === "manager" && (
+                        <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">
+                          Assigned to: {getAssigneeName(task.assignedTo)}
+                        </span>
+                      )}
+                    </div>
+                    {task.description && (
+                      <p className="text-sm text-gray-600 dark:text-gray-300 ml-4">
+                        {task.description}
+                      </p>
                     )}
                   </div>
-                  <div>
-                    <button
-                      onClick={() => handleEditTask(task)}
-                      className="px-2 py-1 bg-yellow-500 text-white rounded mr-2"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDeleteTask(task.id)}
-                      className="px-2 py-1 bg-red-600 text-white rounded"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  {user.role === "manager" && (
+                    <div>
+                      <button
+                        onClick={() => handleEditTask(task)}
+                        className="px-2 py-1 bg-yellow-500 text-white rounded mr-2"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteTask(task._id)}
+                        className="px-2 py-1 bg-red-600 text-white rounded"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -363,22 +496,22 @@ function App() {
                 {isLogin ? "Login" : "Register"}
               </h2>
               {error && <p className="text-red-500 mb-2">{error}</p>}
-              <input
-                type="text"
-                placeholder="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full p-2 rounded bg-gray-200 text-gray-900 placeholder-gray-400 dark:bg-gray-700 dark:text-white mb-2"
-              />
               {!isLogin && (
                 <input
-                  type="email"
-                  placeholder="Email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full p-2 rounded bg-gray-700 text-white placeholder-gray-400 mb-2"
+                  type="text"
+                  placeholder="Name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full p-2 rounded bg-gray-200 text-gray-900 placeholder-gray-400 dark:bg-gray-700 dark:text-white mb-2"
                 />
               )}
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full p-2 rounded bg-gray-200 text-gray-900 placeholder-gray-400 dark:bg-gray-700 dark:text-white mb-2"
+              />
               <input
                 type="password"
                 placeholder="Password"
